@@ -1136,23 +1136,29 @@ void PlayerWindow::setupSignals()
         int ls=ts-lmin*60;
         process->setRange(0,duration);
         process->setSingleStep(1);
-        process->setEventMark(QList<DanmuEvent>());
         totalTimeStr=QString("/%1:%2").arg(lmin,2,10,QChar('0')).arg(ls,2,10,QChar('0'));
         timeLabel->setText("00:00"+this->totalTimeStr);
         static_cast<DanmuStatisInfo *>(danmuStatisBar)->duration=ts;
         const PlayListItem *currentItem=GlobalObjects::playlist->getCurrentItem();
+        if(currentItem->playTime>15 && currentItem->playTime<ts-15)
+        {
+            GlobalObjects::mpvplayer->seek(currentItem->playTime*1000);
+            showMessage(tr("Jumped to the last play position"));
+        }
+        if(resizePercent!=-1) adjustPlayerSize(resizePercent);
+        qDebug()<<"Duration Changed";
+    });
+    QObject::connect(GlobalObjects::mpvplayer,&MPVPlayer::fileChanged,[this](){
+        const PlayListItem *currentItem=GlobalObjects::playlist->getCurrentItem();
+        Q_ASSERT(currentItem);
+        process->setEventMark(QList<DanmuEvent>());
         if(currentItem->animeTitle.isEmpty())
-        {
             titleLabel->setText(currentItem->title);
-        }
         else
-        {
-            titleLabel->setText(QString("%1-%2").arg(currentItem->animeTitle).arg(currentItem->title));
-        }
+            titleLabel->setText(QString("%1-%2").arg(currentItem->animeTitle,currentItem->title));
         if(!currentItem->poolID.isEmpty())
         {
-			GlobalObjects::danmuPool->setPoolID(currentItem->poolID);
-            //GlobalObjects::danmuPool->loadDanmuFromDB();
+            GlobalObjects::danmuPool->setPoolID(currentItem->poolID);
         }
         else
         {
@@ -1160,17 +1166,11 @@ void PlayerWindow::setupSignals()
             if (GlobalObjects::danmuPool->hasPool())
             {
                 GlobalObjects::danmuPool->setPoolID("");
-                //GlobalObjects::danmuPool->cleanUp();
             }
         }
-        if(resizePercent!=-1)
-            adjustPlayerSize(resizePercent);
-        if(currentItem->playTime>15 && currentItem->playTime<ts-15)
-        {
-            GlobalObjects::mpvplayer->seek(currentItem->playTime*1000);
-            showMessage(tr("Jumped to the last play position"));
-        }
+        qDebug()<<"File Changed,Current Item: "<<currentItem->title;
     });
+
     QObject::connect(GlobalObjects::playlist,&PlayList::currentMatchChanged,[this](){
         const PlayListItem *currentItem=GlobalObjects::playlist->getCurrentItem();
         if(currentItem->animeTitle.isEmpty())
@@ -1191,12 +1191,22 @@ void PlayerWindow::setupSignals()
         timeLabel->setText(QString("%1:%2%3").arg(cmin,2,10,QChar('0')).arg(cls,2,10,QChar('0')).arg(this->totalTimeStr));
     });
     QObject::connect(GlobalObjects::mpvplayer,&MPVPlayer::stateChanged,[this](MPVPlayer::PlayState state){
+        if(GlobalObjects::playlist->getCurrentItem()!=nullptr)
+        {
+#ifdef Q_OS_WIN
+            if(state==MPVPlayer::Play)
+                SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED);
+            else
+                SetThreadExecutionState(ES_CONTINUOUS);
+#endif
+            if(onTopWhilePlaying)
+            {
+                emit setStayOnTop(state==MPVPlayer::Play);
+            }
+        }
         if(onTopWhilePlaying && GlobalObjects::playlist->getCurrentItem() != nullptr)
         {
-            if(state==MPVPlayer::Play)
-                emit setStayOnTop(true);
-            else
-                emit setStayOnTop(false);
+
         }
         switch(state)
         {
@@ -1796,11 +1806,15 @@ void PlayerWindow::dropEvent(QDropEvent *event)
 void PlayerWindow::wheelEvent(QWheelEvent *event)
 {
 	int val = volume->value();
-	if(val>0 && val<100)
-		QApplication::sendEvent(volume,event);
-	else if(val==0 && event->angleDelta().y()>0)
-		QApplication::sendEvent(volume, event);
-	else if(val==100 && event->angleDelta().y()<0)
-		QApplication::sendEvent(volume, event);
+	if (val > 0 && val < 100 || val == 0 && event->angleDelta().y()>0 || val == 100 && event->angleDelta().y() < 0)
+	{
+		static bool inProcess = false;
+		if (!inProcess)
+		{
+			inProcess = true;
+			QApplication::sendEvent(volume, event);
+			inProcess = false;
+		}
+	}
     showMessage(tr("Volume: %0").arg(volume->value()));
 }
